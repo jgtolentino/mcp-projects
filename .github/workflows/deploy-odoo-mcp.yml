@@ -1,0 +1,187 @@
+name: Deploy Odoo MCP Finance
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'addons/ipai_mcp_finance/**'
+      - 'infra/do/**'
+      - 'infra/docker/**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  DO_PROJECT_ID: 29cde7a1-8280-46ad-9fdf-dea7b21a7825
+  SUPABASE_PROJECT_REF: xkxyvboeubffxxbebsll
+
+jobs:
+  validate-module:
+    name: Validate Odoo Module
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Odoo dependencies
+        run: |
+          pip install -r requirements.txt || true
+          pip install flake8 pylint
+
+      - name: Lint Python code
+        run: |
+          flake8 addons/ipai_mcp_finance --max-line-length=120 --exclude=__init__.py
+          pylint addons/ipai_mcp_finance --disable=C0114,C0115,C0116
+
+      - name: Validate manifest
+        run: |
+          python scripts/validate_manifest.py addons/ipai_mcp_finance/__manifest__.py
+
+      - name: Check AGPL-3 license
+        run: |
+          grep -q "AGPL-3" addons/ipai_mcp_finance/__manifest__.py || exit 1
+
+  acceptance-gates:
+    name: Run Acceptance Gates
+    runs-on: ubuntu-latest
+    needs: validate-module
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: test_odoo
+          POSTGRES_USER: odoo
+          POSTGRES_PASSWORD: odoo
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Odoo and dependencies
+        run: |
+          pip install odoo==18.0
+          pip install anthropic-mcp openpyxl python-dateutil
+
+      - name: Initialize Odoo database
+        run: |
+          odoo -d test_odoo -i base --stop-after-init
+        env:
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_USER: odoo
+          DB_PASSWORD: odoo
+
+      - name: Gate 1 - Module Installation
+        run: |
+          odoo -d test_odoo -i ipai_mcp_finance --stop-after-init --addons-path=addons
+        env:
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_USER: odoo
+          DB_PASSWORD: odoo
+
+      - name: Gate 2 - MCP Tools Registration
+        run: |
+          python scripts/test_mcp_registration.py
+        env:
+          ODOO_DB: test_odoo
+          ODOO_URL: http://localhost:8069
+
+      - name: Gate 3-5 - Tool Functionality Tests
+        run: |
+          python -m pytest tests/test_trial_balance.py -v
+          python -m pytest tests/test_journal_entry.py -v
+          python -m pytest tests/test_bir_2307.py -v
+
+      - name: Gate 6 - Audit Log Test
+        run: |
+          python scripts/test_audit_log.py
+
+      - name: Gate 7 - Security Groups Test
+        run: |
+          python scripts/test_security_groups.py
+
+  deploy-to-digitalocean:
+    name: Deploy to DigitalOcean
+    runs-on: ubuntu-latest
+    needs: acceptance-gates
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DO_ACCESS_TOKEN }}
+
+      - name: Update App Spec
+        run: |
+          doctl apps update ${{ secrets.ODOO_APP_ID }} --spec infra/do/odoo-mcp-finance.yaml
+
+      - name: Create Deployment
+        run: |
+          doctl apps create-deployment ${{ secrets.ODOO_APP_ID }} --force-rebuild --wait
+
+      - name: Verify Deployment
+        run: |
+          sleep 60  # Wait for health checks
+          curl -f https://odoo.insightpulseai.net/web/health || exit 1
+
+      - name: Notify Mattermost
+        if: always()
+        run: |
+          curl -X POST ${{ secrets.MATTERMOST_WEBHOOK_URL }} \
+            -H 'Content-Type: application/json' \
+            -d "{\"text\": \"✅ Odoo MCP Finance deployed successfully\"}"
+
+  rollback-on-failure:
+    name: Rollback on Failure
+    runs-on: ubuntu-latest
+    needs: deploy-to-digitalocean
+    if: failure()
+
+    steps:
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DO_ACCESS_TOKEN }}
+
+      - name: Rollback to Previous Deployment
+        run: |
+          # Get last successful deployment
+          LAST_GOOD=$(doctl apps list-deployments ${{ secrets.ODOO_APP_ID }} \
+            --format ID,Phase \
+            | grep ACTIVE | head -n2 | tail -n1 | awk '{print $1}')
+
+          # Create rollback deployment
+          doctl apps create-deployment ${{ secrets.ODOO_APP_ID }} \
+            --deployment-id $LAST_GOOD
+
+      - name: Notify Mattermost - Rollback
+        run: |
+          curl -X POST ${{ secrets.MATTERMOST_WEBHOOK_URL }} \
+            -H 'Content-Type: application/json' \
+            -d "{\"text\": \"🚨 Deployment failed - Rollback executed\"}"

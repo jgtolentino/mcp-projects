@@ -1,0 +1,8 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_mcp_finance_config_user,mcp.finance.config.user,model_mcp_finance_config,group_mcp_finance_user,1,0,0,0
+access_mcp_finance_config_admin,mcp.finance.config.admin,model_mcp_finance_config,group_mcp_finance_admin,1,1,1,1
+access_mcp_finance_tool_user,mcp.finance.tool.user,model_mcp_finance_tool,group_mcp_finance_user,1,0,0,0
+access_mcp_finance_tool_admin,mcp.finance.tool.admin,model_mcp_finance_tool,group_mcp_finance_admin,1,1,1,1
+access_mcp_finance_tool_execution_user,mcp.finance.tool.execution.user,model_mcp_finance_tool_execution,group_mcp_finance_user,1,0,0,0
+access_mcp_finance_tool_execution_manager,mcp.finance.tool.execution.manager,model_mcp_finance_tool_execution,group_mcp_finance_manager,1,1,1,0
+access_mcp_finance_tool_execution_admin,mcp.finance.tool.execution.admin,model_mcp_finance_tool_execution,group_mcp_finance_admin,1,1,1,1

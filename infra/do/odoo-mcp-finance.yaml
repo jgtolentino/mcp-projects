@@ -1,0 +1,92 @@
+# DigitalOcean App Platform Spec for Odoo + ipai_mcp_finance
+# Deploy with: doctl apps create --spec infra/do/odoo-mcp-finance.yaml
+
+name: odoo-mcp-finance
+region: sgp1
+
+services:
+  - name: odoo-erp
+    github:
+      repo: jgtolentino/mcp-projects
+      branch: main
+      deploy_on_push: true
+
+    dockerfile_path: infra/docker/Dockerfile.odoo
+
+    instance_count: 1
+    instance_size_slug: professional-s  # 2 vCPU, 4GB RAM
+
+    http_port: 8069
+
+    routes:
+      - path: /
+
+    envs:
+      # Odoo Core Config
+      - key: ODOO_RC
+        value: /etc/odoo/odoo.conf
+
+      # Database Connection (Supabase)
+      - key: DB_HOST
+        value: aws-1-us-east-1.pooler.supabase.com
+      - key: DB_PORT
+        value: "6543"  # Pooler port for App Platform
+      - key: DB_NAME
+        value: postgres
+      - key: DB_USER
+        scope: RUN_AND_BUILD_TIME
+        type: SECRET
+        value: ${SUPABASE_DB_USER}
+      - key: DB_PASSWORD
+        scope: RUN_AND_BUILD_TIME
+        type: SECRET
+        value: ${SUPABASE_DB_PASSWORD}
+
+      # Odoo Performance
+      - key: WORKERS
+        value: "4"  # 2 × vCPU
+      - key: MAX_CRON_THREADS
+        value: "2"
+      - key: LIMIT_MEMORY_HARD
+        value: "2684354560"  # 2.5GB
+      - key: LIMIT_MEMORY_SOFT
+        value: "2147483648"  # 2GB
+
+      # Odoo Modules
+      - key: ADDONS_PATH
+        value: "/mnt/extra-addons,/usr/lib/python3/dist-packages/odoo/addons"
+
+      # MCP Server Config
+      - key: MCP_ENABLED
+        value: "true"
+      - key: MCP_API_KEY
+        scope: RUN_AND_BUILD_TIME
+        type: SECRET
+        value: ${ODOO_MCP_API_KEY}
+
+      # Session Store (Redis - optional, can add as separate service)
+      # - key: SESSION_STORE
+      #   value: redis
+      # - key: REDIS_URL
+      #   value: ${REDIS_CONNECTION_URL}
+
+    health_check:
+      http_path: /web/health
+      initial_delay_seconds: 60
+      period_seconds: 30
+      timeout_seconds: 10
+      success_threshold: 1
+      failure_threshold: 3
+
+# Database (using Supabase external)
+# Redis cache (optional - add if needed for session store)
+
+# Static Assets (optional - can use DigitalOcean Spaces)
+
+ingress:
+  rules:
+    - component:
+        name: odoo-erp
+      match:
+        path:
+          prefix: /

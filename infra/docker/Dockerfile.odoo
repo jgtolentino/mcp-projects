@@ -1,0 +1,49 @@
+# Dockerfile for Odoo CE 18.0 with ipai_mcp_finance module
+# Base image: Official Odoo 18.0
+FROM odoo:18.0
+
+USER root
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    python3-pip \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies for MCP
+RUN pip3 install --no-cache-dir \
+    anthropic-mcp \
+    openpyxl \
+    python-dateutil
+
+# Install mcp-server-odoo base module (Ivanov's module)
+# Note: This assumes it's available via git or OCA
+# Adjust source as needed
+RUN mkdir -p /mnt/extra-addons && \
+    cd /tmp && \
+    git clone https://github.com/ivanovart/mcp-server-odoo.git && \
+    cp -r mcp-server-odoo/odoo_module/mcp_server /mnt/extra-addons/ && \
+    rm -rf /tmp/mcp-server-odoo
+
+# Copy ipai_mcp_finance module
+COPY addons/ipai_mcp_finance /mnt/extra-addons/ipai_mcp_finance
+
+# Set proper permissions
+RUN chown -R odoo:odoo /mnt/extra-addons
+
+# Copy Odoo configuration
+COPY infra/docker/odoo.conf /etc/odoo/odoo.conf
+RUN chown odoo:odoo /etc/odoo/odoo.conf
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8069/web/health || exit 1
+
+USER odoo
+
+# Expose Odoo port
+EXPOSE 8069
+
+# Default command
+CMD ["odoo"]
